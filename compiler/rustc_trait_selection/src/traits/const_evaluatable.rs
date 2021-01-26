@@ -697,12 +697,7 @@ pub(super) fn try_unify<'tcx>(
                 // FIXME(const_evaluatable_checked): We may want to either actually try
                 // to evaluate `a_ct` and `b_ct` if they are are fully concrete or something like
                 // this, for now we just return false here.
-                _ => {
-                    println!("{:?}", a_ct.val);
-                    println!("{:?}", b_ct.val);
-                    panic!("!!{:?}!!, !!{:?}!!", a_ct.val, b_ct.val);
-                    //false
-                }
+                _ => false,
             }
         }
         (Node::Binop(a_op, al, ar), Node::Binop(b_op, bl, br)) if a_op == b_op => {
