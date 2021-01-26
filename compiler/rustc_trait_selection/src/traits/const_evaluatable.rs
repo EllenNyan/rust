@@ -612,10 +612,66 @@ pub(super) fn try_unify<'tcx>(
     a: AbstractConst<'tcx>,
     b: AbstractConst<'tcx>,
 ) -> bool {
+    let mut a_is_none = false;
+    let mut a_is_leaf = false;
+    let (a_is_subst, a) = {
+        if let Node::Leaf(a_ct) = a.root() {
+            a_is_leaf = true;
+            let a_ct = a_ct.subst(tcx, a.substs);
+            if let ty::ConstKind::Unevaluated(..) = a_ct.val {
+                (
+                    true,
+                    match AbstractConst::from_const(tcx, a_ct) {
+                        Ok(Some(a)) => a,
+                        Ok(None) => {
+                            a_is_none = true;
+                            a
+                        }
+                        Err(_) => return true,
+                    },
+                )
+            } else {
+                (false, a)
+            }
+        } else {
+            (false, a)
+        }
+    };
+
+    let mut b_is_none = false;
+    let mut b_is_leaf = false;
+    let (b_is_subst, b) = {
+        if let Node::Leaf(b_ct) = b.root() {
+            b_is_leaf = true;
+            let b_ct = b_ct.subst(tcx, b.substs);
+            if let ty::ConstKind::Unevaluated(..) = b_ct.val {
+                (
+                    true,
+                    match AbstractConst::from_const(tcx, b_ct) {
+                        Ok(Some(b)) => b,
+                        Ok(None) => {
+                            b_is_none = true;
+                            b
+                        }
+                        Err(_) => return true,
+                    },
+                )
+            } else {
+                (false, b)
+            }
+        } else {
+            (false, b)
+        }
+    };
+
+    if (a_is_none && !b_is_leaf) || (b_is_none && !a_is_leaf) {
+        return false;
+    }
+
     match (a.root(), b.root()) {
         (Node::Leaf(a_ct), Node::Leaf(b_ct)) => {
-            let a_ct = a_ct.subst(tcx, a.substs);
-            let b_ct = b_ct.subst(tcx, b.substs);
+            let a_ct = if !a_is_subst { a_ct.subst(tcx, a.substs) } else { a_ct };
+            let b_ct = if !b_is_subst { b_ct.subst(tcx, b.substs) } else { b_ct };
             if a_ct.ty != b_ct.ty {
                 return false;
             }
@@ -641,7 +697,12 @@ pub(super) fn try_unify<'tcx>(
                 // FIXME(const_evaluatable_checked): We may want to either actually try
                 // to evaluate `a_ct` and `b_ct` if they are are fully concrete or something like
                 // this, for now we just return false here.
-                _ => false,
+                _ => {
+                    println!("{:?}", a_ct.val);
+                    println!("{:?}", b_ct.val);
+                    panic!("!!{:?}!!, !!{:?}!!", a_ct.val, b_ct.val);
+                    //false
+                }
             }
         }
         (Node::Binop(a_op, al, ar), Node::Binop(b_op, bl, br)) if a_op == b_op => {
