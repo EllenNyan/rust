@@ -1691,44 +1691,61 @@ impl<'tcx> TyS<'tcx> {
     /// `ty.conservative_is_privately_uninhabited` implies that any value of type `ty`
     /// will be `Abi::Uninhabited`. (Note that uninhabited types may have nonzero
     /// size, to account for partial initialisation. See #49298 for details.)
-    pub fn conservative_is_privately_uninhabited(&self, tcx: TyCtxt<'tcx>) -> bool {
-        // FIXME(varkor): we can make this less conversative by substituting concrete
-        // type arguments.
+    #[instrument(level = "debug", skip(tcx))]
+    pub fn conservative_is_privately_uninhabited(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+    ) -> bool {
         match self.kind() {
-            ty::Never => true,
+            ty::Never => {
+                debug!("ty::Never =>");
+                true
+            }
             ty::Adt(def, _) if def.is_union() => {
+                debug!("ty::Adt(def, _) if def.is_union() =>");
                 // For now, `union`s are never considered uninhabited.
                 false
             }
-            ty::Adt(def, _) => {
+            ty::Adt(def, substs) => {
+                debug!("ty::Adt(def, _) if def.is_not_union() =>");
                 // Any ADT is uninhabited if either:
                 // (a) It has no variants (i.e. an empty `enum`);
                 // (b) Each of its variants (a single one in the case of a `struct`) has at least
                 //     one uninhabited field.
                 def.variants.iter().all(|var| {
                     var.fields.iter().any(|field| {
-                        tcx.type_of(field.did).conservative_is_privately_uninhabited(tcx)
+                        tcx.type_of(field.did)
+                            .subst(tcx, substs)
+                            .conservative_is_privately_uninhabited(tcx, param_env)
                     })
                 })
             }
             ty::Tuple(..) => {
-                self.tuple_fields().any(|ty| ty.conservative_is_privately_uninhabited(tcx))
+                debug!("ty::Tuple(..) =>");
+                self.tuple_fields()
+                    .any(|ty| ty.conservative_is_privately_uninhabited(tcx, param_env))
             }
             ty::Array(ty, len) => {
-                match len.try_eval_usize(tcx, ParamEnv::empty()) {
+                debug!("ty::Array(ty, len) =>");
+                match len.try_eval_usize(tcx, param_env) {
                     Some(0) | None => false,
                     // If the array is definitely non-empty, it's uninhabited if
                     // the type of its elements is uninhabited.
-                    Some(1..) => ty.conservative_is_privately_uninhabited(tcx),
+                    Some(1..) => ty.conservative_is_privately_uninhabited(tcx, param_env),
                 }
             }
             ty::Ref(..) => {
+                debug!("ty::Ref(..) =>");
                 // References to uninitialised memory is valid for any type, including
                 // uninhabited types, in unsafe code, so we treat all references as
                 // inhabited.
                 false
             }
-            _ => false,
+            _ => {
+                debug!("_ =>");
+                false
+            }
         }
     }
 
