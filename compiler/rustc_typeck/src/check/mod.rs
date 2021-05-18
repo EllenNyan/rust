@@ -468,6 +468,7 @@ fn diagnostic_only_typeck<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> &ty::T
     typeck_with_fallback(tcx, def_id, fallback)
 }
 
+#[instrument(level = "debug", skip(tcx, fallback))]
 fn typeck_with_fallback<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
@@ -490,8 +491,11 @@ fn typeck_with_fallback<'tcx>(
     let body = tcx.hir().body(body_id);
 
     let typeck_results = Inherited::build(tcx, def_id).enter(|inh| {
+        debug!("CLOSURE HELLO");
         let param_env = tcx.param_env(def_id);
         let fcx = if let (Some(header), Some(decl)) = (fn_header, fn_decl) {
+            debug!("typeck_with_fallback: MAIN BRANCH");
+
             let fn_sig = if crate::collect::get_infer_ret_ty(&decl.output).is_some() {
                 let fcx = FnCtxt::new(&inh, param_env, body.value.hir_id);
                 <dyn AstConv<'_>>::ty_of_fn(
@@ -524,6 +528,7 @@ fn typeck_with_fallback<'tcx>(
             let fcx = check_fn(&inh, param_env, fn_sig, decl, id, body, None).0;
             fcx
         } else {
+            debug!("typeck_with_fallback: ELSE BRANCH");
             let fcx = FnCtxt::new(&inh, param_env, body.value.hir_id);
             let expected_type = body_ty
                 .and_then(|ty| match ty.kind {
@@ -563,26 +568,36 @@ fn typeck_with_fallback<'tcx>(
                     _ => fallback(),
                 });
 
+            debug!("typeck_with_fallback: expected_type={:?}", expected_type);
+
+            debug!("typeck_with_fallback: normalize_associated_types_in");
             let expected_type = fcx.normalize_associated_types_in(body.value.span, expected_type);
+            debug!("typeck_with_fallback: require_type_is_sized");
             fcx.require_type_is_sized(expected_type, body.value.span, traits::ConstSized);
 
+            debug!("typeck_with_fallback: instantiate_opaque_types_from_value");
             let revealed_ty = fcx.instantiate_opaque_types_from_value(
                 id,
                 expected_type,
                 body.value.span,
                 Some(sym::impl_trait_in_bindings),
             );
+            debug!("tyepck_with_fallback: revealed_ty={:?}", revealed_ty);
 
+            debug!("typeck_with_fallback: GatherLocalsVisitor::visit_body");
             // Gather locals in statics (because of block expressions).
             GatherLocalsVisitor::new(&fcx, id).visit_body(body);
 
+            debug!("typeck_with_fallback: check_expr_coercable_to_type");
             fcx.check_expr_coercable_to_type(&body.value, revealed_ty, None);
 
+            debug!("typeck_with_fallback: write_ty");
             fcx.write_ty(id, revealed_ty);
 
             fcx
         };
 
+        debug!("a");
         // All type checking constraints were added, try to fallback unsolved variables.
         fcx.select_obligations_where_possible(false, |_| {});
         let mut fallback_has_occurred = false;
@@ -616,6 +631,7 @@ fn typeck_with_fallback<'tcx>(
         // If we had tried to fallback the opaque inference variable to `MyType`,
         // we will generate a confusing type-check error that does not explicitly
         // refer to opaque types.
+        debug!("b");
         fcx.select_obligations_where_possible(fallback_has_occurred, |_| {});
 
         // We now run fallback again, but this time we allow it to replace
@@ -626,6 +642,7 @@ fn typeck_with_fallback<'tcx>(
         }
 
         // See if we can make any more progress.
+        debug!("c");
         fcx.select_obligations_where_possible(fallback_has_occurred, |_| {});
 
         // Even though coercion casts provide type hints, we check casts after fallback for

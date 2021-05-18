@@ -183,7 +183,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let old_diverges = self.diverges.replace(Diverges::Maybe);
         let old_has_errors = self.has_errors.replace(false);
 
+        debug!("check_expr_With_expectation: check expr kind");
         let ty = ensure_sufficient_stack(|| self.check_expr_kind(expr, expected));
+        debug!("check_expr_With_expectation: checked expr kind");
 
         // Warn for non-block expressions with diverging children.
         match expr.kind {
@@ -207,7 +209,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Record the type, which applies it effects.
         // We need to do this after the warning above, so that
         // we don't warn for the diverging expression itself.
+        debug!("check_expr_with_expectation: write ty");
         self.write_ty(expr.hir_id, ty);
+        debug!("check_expr_with_expectation: written ty");
 
         // Combine the diverging and has_error flags.
         self.diverges.set(self.diverges.get() | old_diverges);
@@ -460,24 +464,36 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.resolve_lang_item_path(lang_item, expr.span, expr.hir_id).1
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn check_expr_path(
         &self,
         qpath: &'tcx hir::QPath<'tcx>,
         expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
         let tcx = self.tcx;
+
+        debug!("check_expr_path: resolve_ty_and_res_ufcs");
         let (res, opt_ty, segs) = self.resolve_ty_and_res_ufcs(qpath, expr.hir_id, expr.span);
+        debug!("check_expr_path: end resolve_ty_and_res_ufcs");
+
+        debug!("check_expr_path: match res");
         let ty = match res {
             Res::Err => {
+                debug!("check_expr_path: Res::Err");
                 self.set_tainted_by_errors();
                 tcx.ty_error()
             }
             Res::Def(DefKind::Ctor(_, CtorKind::Fictive), _) => {
+                debug!("check_expr_path: Res::Def(DefKind::Ctor(_, CtorKind::Fictiv), _)");
                 report_unexpected_variant_res(tcx, res, expr.span);
                 tcx.ty_error()
             }
-            _ => self.instantiate_value_path(segs, opt_ty, res, expr.span, expr.hir_id).0,
+            _ => {
+                debug!("check_expr_path: _");
+                self.instantiate_value_path(segs, opt_ty, res, expr.span, expr.hir_id).0
+            }
         };
+        debug!("check_expr_path: end match res");
 
         if let ty::FnDef(..) = ty.kind() {
             let fn_sig = ty.fn_sig(tcx);
@@ -525,10 +541,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.require_type_is_sized_deferred(output, expr.span, traits::SizedReturnType);
         }
 
+        debug!("check_expr_path: add wf bounds");
         // We always require that the type provided as the value for
         // a type parameter outlives the moment of instantiation.
         let substs = self.typeck_results.borrow().node_substs(expr.hir_id);
         self.add_wf_bounds(substs, expr);
+        debug!("check_expr_path: added wf bounds");
 
         ty
     }

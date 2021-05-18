@@ -57,7 +57,9 @@ impl<'tcx> CheckWfFcxBuilder<'tcx> {
                 check_false_global_bounds(&fcx, span, id);
             }
             let wf_tys = f(&fcx);
+            debug!("with_fcx: selecting!");
             fcx.select_all_obligations_or_error();
+            debug!("with_fcx: selected!");
             fcx.regionck_item(id, span, &wf_tys);
         });
     }
@@ -885,8 +887,18 @@ fn check_where_clauses<'tcx, 'fcx>(
     assert_eq!(predicates.predicates.len(), predicates.spans.len());
     let wf_obligations =
         iter::zip(&predicates.predicates, &predicates.spans).flat_map(|(&p, &sp)| {
-            traits::wf::predicate_obligations(fcx, fcx.param_env, fcx.body_id, p, sp)
+            let o = traits::wf::predicate_obligations(fcx, fcx.param_env, fcx.body_id, p, sp);
+            debug!("check_where_clauses: wg_obligations_chunk={:?}", &o);
+            o
         });
+
+    let wf_obligations = wf_obligations.collect::<Vec<_>>();
+    debug!("check_where_clauses: wf_obligations={:?}", &wf_obligations);
+    let wf_obligations = wf_obligations.into_iter();
+
+    let default_obligations = default_obligations.collect::<Vec<_>>();
+    debug!("check_where_clauses: default_obligations={:?}", &default_obligations);
+    let default_obligations = default_obligations.into_iter();
 
     for obligation in wf_obligations.chain(default_obligations) {
         debug!("next obligation cause: {:?}", obligation.cause);

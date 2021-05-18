@@ -342,6 +342,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// As `instantiate_type_scheme`, but for the bounds found in a
     /// generic type scheme.
+    #[instrument(level = "debug", skip(self))]
     pub(in super::super) fn instantiate_bounds(
         &self,
         span: Span,
@@ -1505,13 +1506,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         assert!(!ty.has_escaping_bound_vars());
 
         // First, store the "user substs" for later.
+        debug!("write_user_type_annotations");
         self.write_user_type_annotation_from_substs(hir_id, def_id, substs, user_self_ty);
-
+        debug!("add_required_obligations");
         self.add_required_obligations(span, def_id, &substs);
 
         // Substitute the values for the type parameters into the type of
         // the referenced item.
+        debug!("instantiate_type_scheme");
         let ty_substituted = self.instantiate_type_scheme(span, &substs, ty);
+        debug!("instantiated");
 
         if let Some(UserSelfTy { impl_def_id, self_ty }) = user_self_ty {
             // In the case of `Foo<T>::method` and `<Foo<T>>::method`, if `method`
@@ -1544,8 +1548,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     /// Add all the obligations that are required, substituting and normalized appropriately.
+    #[instrument(level = "debug", skip(self))]
     fn add_required_obligations(&self, span: Span, def_id: DefId, substs: &SubstsRef<'tcx>) {
         let (bounds, spans) = self.instantiate_bounds(span, def_id, &substs);
+
+        debug!("add_required_obligations: bounds={:?}", bounds);
 
         for (i, mut obligation) in traits::predicates_for_generics(
             traits::ObligationCause::new(span, self.body_id, traits::ItemObligation(def_id)),

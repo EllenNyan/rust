@@ -2265,28 +2265,53 @@ impl<'tcx> Debug for Rvalue<'tcx> {
         use self::Rvalue::*;
 
         match *self {
-            Use(ref place) => write!(fmt, "{:?}", place),
+            Use(ref place) => {
+                println!("use");
+                write!(fmt, "{:?}", place)
+            }
             Repeat(ref a, ref b) => {
+                println!("repeat");
                 write!(fmt, "[{:?}; ", a)?;
                 pretty_print_const(b, fmt, false)?;
                 write!(fmt, "]")
             }
-            Len(ref a) => write!(fmt, "Len({:?})", a),
+            Len(ref a) => {
+                println!("len");
+                write!(fmt, "Len({:?})", a)
+            }
             Cast(ref kind, ref place, ref ty) => {
+                println!("cast");
                 write!(fmt, "{:?} as {:?} ({:?})", place, ty, kind)
             }
-            BinaryOp(ref op, box (ref a, ref b)) => write!(fmt, "{:?}({:?}, {:?})", op, a, b),
+            BinaryOp(ref op, box (ref a, ref b)) => {
+                println!("binary op");
+                write!(fmt, "{:?}({:?}, {:?})", op, a, b)
+            }
             CheckedBinaryOp(ref op, box (ref a, ref b)) => {
+                println!("checked binary op");
                 write!(fmt, "Checked{:?}({:?}, {:?})", op, a, b)
             }
-            UnaryOp(ref op, ref a) => write!(fmt, "{:?}({:?})", op, a),
-            Discriminant(ref place) => write!(fmt, "discriminant({:?})", place),
-            NullaryOp(ref op, ref t) => write!(fmt, "{:?}({:?})", op, t),
-            ThreadLocalRef(did) => ty::tls::with(|tcx| {
-                let muta = tcx.static_mutability(did).unwrap().prefix_str();
-                write!(fmt, "&/*tls*/ {}{}", muta, tcx.def_path_str(did))
-            }),
+            UnaryOp(ref op, ref a) => {
+                println!("unary op");
+                write!(fmt, "{:?}({:?})", op, a)
+            }
+            Discriminant(ref place) => {
+                println!("discriminant");
+                write!(fmt, "discriminant({:?})", place)
+            }
+            NullaryOp(ref op, ref t) => {
+                println!("nullary op");
+                write!(fmt, "{:?}({:?})", op, t)
+            }
+            ThreadLocalRef(did) => {
+                println!("thread local ref");
+                ty::tls::with(|tcx| {
+                    let muta = tcx.static_mutability(did).unwrap().prefix_str();
+                    write!(fmt, "&/*tls*/ {}{}", muta, tcx.def_path_str(did))
+                })
+            }
             Ref(region, borrow_kind, ref place) => {
+                println!("ref");
                 let kind_str = match borrow_kind {
                     BorrowKind::Shared => "",
                     BorrowKind::Shallow => "shallow ",
@@ -2311,6 +2336,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
             }
 
             AddressOf(mutability, ref place) => {
+                println!("adress of");
                 let kind_str = match mutability {
                     Mutability::Mut => "mut",
                     Mutability::Not => "const",
@@ -2320,6 +2346,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
             }
 
             Aggregate(ref kind, ref places) => {
+                println!("aggregate");
                 let fmt_tuple = |fmt: &mut Formatter<'_>, name: &str| {
                     let mut tuple_fmt = fmt.debug_tuple(name);
                     for place in places {

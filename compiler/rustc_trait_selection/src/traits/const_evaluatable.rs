@@ -27,6 +27,7 @@ use std::iter;
 use std::ops::ControlFlow;
 
 /// Check if a given constant can be evaluated.
+#[instrument(level = "debug", skip(infcx))]
 pub fn is_const_evaluatable<'cx, 'tcx>(
     infcx: &InferCtxt<'cx, 'tcx>,
     def: ty::WithOptConstParam<DefId>,
@@ -326,11 +327,12 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
         } else if let &[mir::ProjectionElem::Field(ZERO_FIELD, _)] = p.projection.as_ref() {
             // Only allow field accesses if the given local
             // contains the result of a checked operation.
-            if self.checked_op_locals.contains(p.local) {
+            /*if self.checked_op_locals.contains(p.local) {
                 Ok(p.local)
             } else {
                 self.error(Some(span), "unsupported projection")?;
-            }
+            }*/
+            Ok(p.local)
         } else {
             self.error(Some(span), "unsupported projection")?;
         }
@@ -373,18 +375,22 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
         }
     }
 
-    fn build_statement(&mut self, stmt: &mir::Statement<'tcx>) -> Result<(), ErrorReported> {
+    fn build_statement(
+        &mut self,
+        stmt: &mir::Statement<'tcx>,
+        local_decls: &IndexVec<rustc_middle::mir::Local, rustc_middle::mir::LocalDecl<'tcx>>,
+    ) -> Result<(), ErrorReported> {
         debug!("AbstractConstBuilder: stmt={:?}", stmt);
         let span = stmt.source_info.span;
         match stmt.kind {
             StatementKind::Assign(box (ref place, ref rvalue)) => {
                 let local = self.place_to_local(span, place)?;
-                match *rvalue {
-                    Rvalue::Use(ref operand) => {
+                match rvalue {
+                    &Rvalue::Use(ref operand) => {
                         self.locals[local] = self.operand_to_node(span, operand)?;
                         Ok(())
                     }
-                    Rvalue::BinaryOp(op, box (ref lhs, ref rhs)) if Self::check_binop(op) => {
+                    &Rvalue::BinaryOp(op, box (ref lhs, ref rhs)) if Self::check_binop(op) => {
                         let lhs = self.operand_to_node(span, lhs)?;
                         let rhs = self.operand_to_node(span, rhs)?;
                         self.locals[local] = self.add_node(Node::Binop(op, lhs, rhs), span);
@@ -394,7 +400,7 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
                             Ok(())
                         }
                     }
-                    Rvalue::CheckedBinaryOp(op, box (ref lhs, ref rhs))
+                    &Rvalue::CheckedBinaryOp(op, box (ref lhs, ref rhs))
                         if Self::check_binop(op) =>
                     {
                         let lhs = self.operand_to_node(span, lhs)?;
@@ -403,9 +409,105 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
                         self.checked_op_locals.insert(local);
                         Ok(())
                     }
-                    Rvalue::UnaryOp(op, ref operand) if Self::check_unop(op) => {
+                    &Rvalue::UnaryOp(op, ref operand) if Self::check_unop(op) => {
                         let operand = self.operand_to_node(span, operand)?;
                         self.locals[local] = self.add_node(Node::UnaryOp(op, operand), span);
+                        Ok(())
+                    }
+                    Rvalue::Aggregate(kind, operands) => {
+                        let mut lhs = *place;
+                        let operands = operands.into_iter().map(|op| {
+                            let ty = op.ty(local_decls, self.tcx);
+                            (op, ty)
+                        });
+                        let kind = kind;
+                        let source_info = stmt.source_info;
+                        let tcx = self.tcx;
+
+                        //
+                        //
+                        // code until next big comment is lifted from rustc_mir::aggregate::expand_aggregate
+                        use rustc_index::vec::Idx;
+                        use rustc_middle::mir::*;
+                        use rustc_target::abi::VariantIdx;
+
+                        use std::convert::TryFrom;
+
+                        let mut set_discriminant = None;
+                        let active_field_index = match kind {
+                            box AggregateKind::Adt(
+                                adt_def,
+                                variant_index,
+                                _,
+                                _,
+                                active_field_index,
+                            ) => {
+                                if adt_def.is_enum() {
+                                    set_discriminant = Some(Statement {
+                                        kind: StatementKind::SetDiscriminant {
+                                            place: Box::new(lhs),
+                                            variant_index: *variant_index,
+                                        },
+                                        source_info,
+                                    });
+                                    lhs = tcx.mk_place_downcast(lhs, adt_def, *variant_index);
+                                }
+                                *active_field_index
+                            }
+                            box AggregateKind::Generator(..) => {
+                                // Right now we only support initializing generators to
+                                // variant 0 (Unresumed).
+                                let variant_index = VariantIdx::new(0);
+                                set_discriminant = Some(Statement {
+                                    kind: StatementKind::SetDiscriminant {
+                                        place: Box::new(lhs),
+                                        variant_index,
+                                    },
+                                    source_info,
+                                });
+
+                                // Operands are upvars stored on the base place, so no
+                                // downcast is necessary.
+
+                                None
+                            }
+                            _ => None,
+                        };
+
+                        let stmts = operands
+                            .enumerate()
+                            .map(move |(i, (op, ty))| {
+                                let lhs_field = if let box AggregateKind::Array(_) = kind {
+                                    let offset = u64::try_from(i).unwrap();
+                                    tcx.mk_place_elem(
+                                        lhs,
+                                        ProjectionElem::ConstantIndex {
+                                            offset,
+                                            min_length: offset + 1,
+                                            from_end: false,
+                                        },
+                                    )
+                                } else {
+                                    let field = Field::new(active_field_index.unwrap_or(i));
+                                    tcx.mk_place_field(lhs, field, ty)
+                                };
+                                Statement {
+                                    source_info,
+                                    kind: StatementKind::Assign(Box::new((
+                                        lhs_field,
+                                        Rvalue::Use(op.clone()),
+                                    ))),
+                                }
+                            })
+                            .chain(set_discriminant)
+                            .collect::<Vec<_>>();
+                        //
+                        //
+                        //
+
+                        for stmt in stmts {
+                            self.build_statement(&stmt, local_decls)?;
+                        }
                         Ok(())
                     }
                     _ => self.error(Some(span), "unsupported rvalue")?,
@@ -491,12 +593,13 @@ impl<'a, 'tcx> AbstractConstBuilder<'a, 'tcx> {
     /// Builds the abstract const by walking the mir from start to finish
     /// and bailing out when encountering an unsupported operation.
     fn build(mut self) -> Result<&'tcx [Node<'tcx>], ErrorReported> {
+        let local_decls = &self.body.local_decls;
         let mut block = &self.body.basic_blocks()[mir::START_BLOCK];
         // We checked for a cyclic cfg above, so this should terminate.
         loop {
             debug!("AbstractConstBuilder: block={:?}", block);
             for stmt in block.statements.iter() {
-                self.build_statement(stmt)?;
+                self.build_statement(stmt, local_decls)?;
             }
 
             if let Some(next) = self.build_terminator(block.terminator())? {

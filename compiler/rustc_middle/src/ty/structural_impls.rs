@@ -1057,7 +1057,10 @@ impl<'tcx> TypeFoldable<'tcx> for ty::ConstKind<'tcx> {
         match *self {
             ty::ConstKind::Infer(ic) => ic.visit_with(visitor),
             ty::ConstKind::Param(p) => p.visit_with(visitor),
-            ty::ConstKind::Unevaluated(ct) => ct.substs.visit_with(visitor),
+            ty::ConstKind::Unevaluated(ct) => {
+                debug!("ConstKind::super_visit_with: substs={:?}", &ct.substs);
+                ct.substs.visit_with(visitor)
+            }
             ty::ConstKind::Value(_)
             | ty::ConstKind::Bound(..)
             | ty::ConstKind::Placeholder(_)
