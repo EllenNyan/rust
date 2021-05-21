@@ -729,6 +729,8 @@ pub(super) fn try_unify<'tcx>(
         }
     }
 
+    debug!("try_unify: a={:?} b={:?}", a, b);
+
     match (a.root(), b.root()) {
         (Node::Leaf(a_ct), Node::Leaf(b_ct)) => {
             let a_ct = a_ct.subst(tcx, a.substs);

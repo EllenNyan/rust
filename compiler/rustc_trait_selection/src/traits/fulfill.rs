@@ -522,14 +522,35 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
                         // if the constants depend on generic parameters.
                         //
                         // Let's just see where this breaks :shrug:
+
                         if let (ty::ConstKind::Unevaluated(a), ty::ConstKind::Unevaluated(b)) =
                             (c1.val, c2.val)
                         {
-                            if self
-                                .selcx
-                                .tcx()
-                                .try_unify_abstract_consts(((a.def, a.substs), (b.def, b.substs)))
+                            for (subst_a, subst_b) in a
+                                .substs
+                                .iter()
+                                .zip(b.substs.iter())
+                                .map(|(subst_a, subst_b)| (subst_a.unpack(), subst_b.unpack()))
+                                .filter_map(|kind| match kind {
+                                    (
+                                        ty::subst::GenericArgKind::Const(ct_a),
+                                        ty::subst::GenericArgKind::Const(ct_b),
+                                    ) => Some((ct_a, ct_b)),
+                                    _ => None,
+                                })
                             {
+                                if let ty::ConstKind::Infer(_) = subst_b.val {
+                                    infcx
+                                        .at(&obligation.cause, obligation.param_env)
+                                        .eq(subst_a, subst_b)
+                                        .unwrap();
+                                }
+                            }
+
+                            if self.selcx.tcx().try_unify_abstract_consts((
+                                (a.def, infcx.resolve_vars_if_possible(a.substs)),
+                                (b.def, infcx.resolve_vars_if_possible(b.substs)),
+                            )) {
                                 return ProcessResult::Changed(vec![]);
                             }
                         }

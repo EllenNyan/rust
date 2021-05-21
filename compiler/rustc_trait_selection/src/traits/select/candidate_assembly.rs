@@ -220,6 +220,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         self.filter_negative_and_reservation_impls(candidates.pop().unwrap().candidate)
     }
 
+    #[instrument(level = "debug", skip(self))]
     pub(super) fn assemble_candidates<'o>(
         &mut self,
         stack: &TraitObligationStack<'o, 'tcx>,
