@@ -48,6 +48,12 @@ pub fn is_const_evaluatable<'cx, 'tcx>(
                                 return Ok(());
                             }
 
+                            if let foo::ConstsCanUnify::No =
+                                foo::consts_cant_unify(tcx, (def, substs), (b_def, b_substs))
+                            {
+                                continue;
+                            }
+
                             if let Some(b_ct) = AbstractConst::new(tcx, b_def, b_substs)? {
                                 // Try to unify with each subtree in the AbstractConst to allow for
                                 // `N + 1` being const evaluatable even if theres only a `ConstEvaluatable`
@@ -574,6 +580,8 @@ pub(super) fn try_unify_abstract_consts<'tcx>(
         (ty::WithOptConstParam<DefId>, SubstsRef<'tcx>),
     ),
 ) -> bool {
+    debug!("try unify a ct");
+    foo::consts_cant_unify(tcx, (a, a_substs), (b, b_substs));
     (|| {
         if let Some(a) = AbstractConst::new(tcx, a, a_substs)? {
             if let Some(b) = AbstractConst::new(tcx, b, b_substs)? {
@@ -704,5 +712,83 @@ pub(super) fn try_unify<'tcx>(
             try_unify(tcx, a.subtree(a_operand), b.subtree(b_operand))
         }
         _ => false,
+    }
+}
+
+pub mod foo {
+    use super::*;
+
+    pub enum ConstsCanUnify {
+        Ambig,
+        No,
+    }
+
+    struct CantUnify;
+
+    pub fn consts_cant_unify<'tcx>(
+        tcx: TyCtxt<'tcx>,
+        (a, a_substs): (ty::WithOptConstParam<DefId>, SubstsRef<'tcx>),
+        (b, b_substs): (ty::WithOptConstParam<DefId>, SubstsRef<'tcx>),
+    ) -> ConstsCanUnify {
+        match (a.did.as_local(), b.did.as_local()) {
+            (Some(a), Some(b)) => {
+                use rustc_hir::*;
+
+                let hir = tcx.hir();
+                let a_hir_ct = hir.get(hir.local_def_id_to_hir_id(a));
+                let b_hir_ct = hir.get(hir.local_def_id_to_hir_id(b));
+
+                let (a_body_hir, b_body_hir) = match (a_hir_ct, b_hir_ct) {
+                    (Node::AnonConst(a_ct), Node::AnonConst(b_ct)) => {
+                        (a_ct.body.hir_id, b_ct.body.hir_id)
+                    }
+                    _ => bug!("consts_cant_unify should only be called with defs of anon cts"),
+                };
+                let a_body = hir.expect_expr(a_body_hir);
+                let b_body = hir.expect_expr(b_body_hir);
+
+                #[instrument(level = "debug", skip(tcx))]
+                fn walk_hir_together<'tcx, 'hir>(
+                    tcx: TyCtxt<'tcx>,
+                    a: &'hir Expr<'hir>,
+                    b: &'hir Expr<'hir>,
+                ) -> ControlFlow<CantUnify, ()> {
+                    match (&a.kind, &b.kind) {
+                        (
+                            ExprKind::Block(Block { stmts: [], expr: a_expr, .. }, ..),
+                            ExprKind::Block(Block { stmts: [], expr: b_expr, .. }, ..),
+                        ) => match (a_expr, b_expr) {
+                            (Some(a_expr), Some(b_expr)) => walk_hir_together(tcx, a_expr, b_expr)?,
+                            (None, None) => (),
+                            _ => ControlFlow::Break(CantUnify)?,
+                        },
+                        (
+                            ExprKind::Binary(a_op, a_lhs, a_rhs),
+                            ExprKind::Binary(b_op, b_lhs, b_rhs),
+                        ) => {
+                            if a_op.node != b_op.node {
+                                ControlFlow::Break(CantUnify)?;
+                            }
+                            walk_hir_together(tcx, a_lhs, b_lhs)?;
+                            walk_hir_together(tcx, a_rhs, b_rhs)?;
+                        }
+                        (ExprKind::Lit(a_lit), ExprKind::Lit(b_lit)) => {
+                            if a_lit.node != b_lit.node {
+                                ControlFlow::Break(CantUnify)?;
+                            }
+                        }
+                        _ => (),
+                    }
+
+                    ControlFlow::CONTINUE
+                }
+
+                match walk_hir_together(tcx, a_body, b_body) {
+                    ControlFlow::Break(CantUnify) => ConstsCanUnify::No,
+                    ControlFlow::Continue(()) => ConstsCanUnify::Ambig,
+                }
+            }
+            _ => ConstsCanUnify::Ambig,
+        }
     }
 }
