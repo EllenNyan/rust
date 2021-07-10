@@ -2441,9 +2441,71 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
                 ..
             }) = tcx.hir().get(tcx.hir().get_parent_node(hir_id))
             {
+                debug!("explicit_preds_of: getting preds of a ct default");
                 let item_id = tcx.hir().get_parent_node(*param_id);
                 let item_def_id = tcx.hir().local_def_id(item_id).to_def_id();
-                return tcx.explicit_predicates_of(item_def_id);
+                let unfiltered_preds: ty::GenericPredicates<'_> =
+                    tcx.explicit_predicates_of(item_def_id);
+
+                debug!("explicit_preds_of: unfiltered_preds={:?}", &unfiltered_preds);
+
+                use ty::{TypeFoldable, TypeVisitor};
+
+                let param_idx = {
+                    let generics = tcx.generics_of(item_def_id);
+                    let param_def = tcx.hir().local_def_id(*param_id).to_def_id();
+                    generics.param_def_id_to_index[&param_def]
+                };
+                struct HasFwdDeclaredParam(u32, bool);
+
+                use std::ops::ControlFlow;
+                impl<'tcx> TypeVisitor<'tcx> for HasFwdDeclaredParam {
+                    fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<!> {
+                        debug!("explicit_preds_of: visit_ty={:?}", t);
+                        if let ty::Param(param) = t.kind() {
+                            if param.index >= self.0 {
+                                debug!("fwd declared = {:?}", param);
+                                self.1 = true;
+                            }
+                        }
+                        t.super_visit_with(self)
+                    }
+
+                    fn visit_const(&mut self, c: &'tcx Const<'tcx>) -> ControlFlow<!> {
+                        debug!("explicit_preds_of: visit_const={:?}", c);
+                        if let ty::ConstKind::Param(param) = c.val {
+                            if param.index >= self.0 {
+                                debug!("fwd declared = {:?}", param);
+                                self.1 = true;
+                            }
+                        }
+                        c.super_visit_with(self)
+                    }
+                }
+
+                let filtered_preds = unfiltered_preds
+                    .predicates
+                    .iter()
+                    .filter(|pred| match pred.0.kind().skip_binder() {
+                        ty::PredicateKind::Trait(trait_pred, _) => {
+                            debug!("explicit_preds_of: filtering trait_pred={:?}", trait_pred);
+                            let mut visitor = HasFwdDeclaredParam(param_idx, false);
+                            trait_pred.visit_with(&mut visitor);
+                            !visitor.1
+                        }
+                        ty::PredicateKind::Projection(proj_pred) => {
+                            debug!("explicit_preds_of: filtering proj_pred={:?}", proj_pred);
+                            let mut visitor = HasFwdDeclaredParam(param_idx, false);
+                            proj_pred.visit_with(&mut visitor);
+                            !visitor.1
+                        }
+                        _ => true,
+                    })
+                    .cloned();
+                return ty::GenericPredicates {
+                    parent: unfiltered_preds.parent,
+                    predicates: tcx.arena.alloc_from_iter(filtered_preds),
+                };
             }
         }
         gather_explicit_predicates_of(tcx, def_id)

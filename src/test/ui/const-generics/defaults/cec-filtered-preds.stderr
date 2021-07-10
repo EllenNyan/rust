@@ -1,0 +1,16 @@
+error[E0599]: no associated item named `Assoc` found for unit type `()` in the current scope
+  --> $DIR/cec-filtered-preds.rs:5:57
+   |
+LL | pub struct Bar<const N: usize, const M: usize = { <()>::Assoc }> where (): Foo<M>;
+   |                                                         ^^^^^ associated item not found in `()`
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+note: `Foo` defines an item `Assoc`, perhaps you need to implement it
+  --> $DIR/cec-filtered-preds.rs:4:1
+   |
+LL | pub trait Foo<const N: usize> { const Assoc: usize; }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0599`.
